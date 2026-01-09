@@ -1,0 +1,56 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: xai-portal-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/xai_portal?stringtype=unspecified
+    username: postgres
+    password: ${DB_PASSWORD:1234}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  sql:
+    init:
+      mode: never
+
+jwt:
+  secret: ${JWT_SECRET:CHANGE_ME_TO_A_LONG_RANDOM_SECRET_VALUE_AT_LEAST_32_CHARS}
+  access-token-validity-seconds: 3600
+
+cors:
+  allowed-origins:
+    - http://localhost:5173
+    - http://localhost:3000
+    - http://localhost:8080
+    - http://192.168.3.54:3000
+
+a360:
+  base-url: http://a360.bitekic.co.kr
+  authentication-path: /v2/authentication
+  username: admin
+  password: ${A360_PASSWORD:P@ssw0rd}
+  refresh-skew-seconds: 60
+  default-expires-in-seconds: 3600
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY}
+    url: https://api.openai.com/v1/chat/completions
+    model: gpt-4o-mini
+    max-tokens: 1000
+    timeout-seconds: 120
