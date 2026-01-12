@@ -12,8 +12,8 @@ import java.time.LocalDateTime;
 @Table(name = "portal_user")
 @Getter
 @Setter
-@NoArgsConstructor // 👈 추가!
-@AllArgsConstructor // 👈 추가!
+@NoArgsConstructor // 추가!
+@AllArgsConstructor // 추가!
 public class AppUser {
 
     @Id
@@ -38,15 +38,15 @@ public class AppUser {
 
     /** 계정 활성 */
     @Column(nullable = false)
-    private Boolean enabled = true; // 👈 boolean → Boolean
+    private Boolean enabled = true; // boolean → Boolean
 
     /** 계정 잠금 */
     @Column(nullable = false)
-    private Boolean accountLocked = false; // 👈 boolean → Boolean
+    private Boolean accountLocked = false; // boolean → Boolean
 
     /** 로그인 실패 횟수 */
     @Column(nullable = false)
-    private Integer loginFailCount = 0; // 👈 int → Integer
+    private Integer loginFailCount = 0; // int → Integer
 
     /** 마지막 로그인 */
     private LocalDateTime lastLoginAt;

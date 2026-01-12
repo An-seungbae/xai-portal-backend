@@ -42,9 +42,6 @@ public class AiSmartSearchService {
         }
 
         // 2. 텍스트만 있는 경우 -> 의도 파악 후 분기 처리
-
-        //
-
         String intent = identifyIntent(userQuery);
         log.info("🔎 Smart Search Query: [{}], Intent: [{}]", userQuery, intent);
 
@@ -63,7 +60,14 @@ public class AiSmartSearchService {
             resultSummary = "등록된 디바이스 상태 목록입니다.";
 
         } else if ("HISTORY".equalsIgnoreCase(intent)) {
-            A360ActivityResponse res = a360Client.fetchActivities(new A360ActivityRequest());
+            // [수정] ActivityRequest를 사용하여 명시적으로 요청
+            A360ActivityRequest req = new A360ActivityRequest();
+            A360ActivityRequest.Page page = new A360ActivityRequest.Page();
+            page.setOffset(0);
+            page.setLength(100);
+            req.setPage(page);
+
+            A360ActivityResponse res = a360Client.fetchActivities(req);
             searchResult = res != null ? res.getList() : new ArrayList<>();
             resultSummary = "최근 봇 실행 이력입니다.";
 
@@ -90,17 +94,15 @@ public class AiSmartSearchService {
 
     /**
      * GPT-4o Vision API 호출 (이미지 분석)
-     * [수정] DTO가 String 전용으로 변경됨에 따라, 복잡한 이미지 구조 전송이 불가능하여
-     * 컴파일 오류 방지를 위해 임시 Mock 응답으로 대체합니다.
      */
     private String analyzeImageWithGpt(String query, MultipartFile file) {
-        // 원래 로직은 복잡한 Map 구조를 List에 담아야 하는데,
-        // 현재 OpenAiRequest가 List<Map<String, String>>으로 고정되어 있어 호환되지 않습니다.
-        // 우선 컴파일 되도록 가짜 응답을 리턴합니다.
-
+        // [임시 처리] 멀티파트 파일 처리는 별도 로직이 필요하므로 현재는 안내 메시지 반환
+        // 실제 구현 시에는 이미지를 Base64로 인코딩하여 OpenAiRequest의 messages에 content(type:
+        // image_url)로 추가해야 함
         return "[Vision Analysis Result]\n" +
-                "현재 시스템 설정상 이미지 분석(Vision) 기능은 비활성화되어 있습니다.\n" +
-                "(텍스트 DTO 호환성 모드 동작 중)";
+                "이미지 분석 요청이 접수되었습니다.\n" +
+                "현재 모드에서는 텍스트 기반 검색만 지원됩니다.\n" +
+                "(Vision 기능 활성화를 위해 AiImageAnalysisService를 이용해주세요)";
     }
 
     /**
@@ -118,17 +120,18 @@ public class AiSmartSearchService {
         try {
             OpenAiRequest req = new OpenAiRequest();
             req.setModel("gpt-4o-mini");
-
-            // [수정] setMax_tokens -> setMaxTokens
             req.setMaxTokens(50);
 
-            // [수정] Map<String, Object> -> Map<String, String>
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "user", "content", prompt));
-            req.setMessages(messages);
+            // [수정] Helper 메서드 사용
+            req.addMessage("user", prompt);
 
             String raw = openAiClient.call(req);
             JsonNode root = objectMapper.readTree(raw);
+
+            if (!root.has("choices") || root.path("choices").isEmpty()) {
+                return "GENERAL";
+            }
+
             String cleanIntent = root.path("choices").get(0).path("message").path("content").asText()
                     .trim().toUpperCase().replace(".", "").replace("'", "");
 
@@ -163,17 +166,18 @@ public class AiSmartSearchService {
         try {
             OpenAiRequest req = new OpenAiRequest();
             req.setModel("gpt-4o-mini");
-
-            // [수정] setMax_tokens -> setMaxTokens
             req.setMaxTokens(1000);
 
-            // [수정] Map<String, String>
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "user", "content", prompt));
-            req.setMessages(messages);
+            // [수정] Helper 메서드 사용
+            req.addMessage("user", prompt);
 
             String raw = openAiClient.call(req);
             JsonNode root = objectMapper.readTree(raw);
+
+            if (!root.has("choices") || root.path("choices").isEmpty()) {
+                return "답변을 생성할 수 없습니다.";
+            }
+
             return root.path("choices").get(0).path("message").path("content").asText();
 
         } catch (HttpClientErrorException.TooManyRequests e) {

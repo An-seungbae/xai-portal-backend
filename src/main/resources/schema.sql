@@ -1,12 +1,24 @@
 -- ==========================================
 -- 1. 사용자 테이블 (기존)
 -- ==========================================
-CREATE TABLE IF NOT EXISTS portal_user (
+CREATE TABLE portal_user (
     id BIGSERIAL PRIMARY KEY,
-    username VARCHAR(100) UNIQUE NOT NULL,
-    password_hash VARCHAR(200) NOT NULL,
-    roles VARCHAR(200) NOT NULL,
+    
+    -- [찰스 추가] 자바 코드(AppUser.java)에 필수적인 컬럼들 추가
+    email VARCHAR(100) UNIQUE NOT NULL,    
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    roles VARCHAR(255) NOT NULL,
+    
+    -- [찰스 추가] 누락되었던 상태값 컬럼들 추가
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    account_locked BOOLEAN NOT NULL DEFAULT FALSE,
+    login_fail_count INTEGER NOT NULL DEFAULT 0,
+    last_login_at TIMESTAMP,
+    
+    full_name VARCHAR(100),
+    department VARCHAR(100),
+    position VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

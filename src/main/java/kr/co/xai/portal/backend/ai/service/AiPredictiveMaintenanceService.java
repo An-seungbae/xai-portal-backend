@@ -6,10 +6,11 @@ import kr.co.xai.portal.backend.ai.dto.BotRiskDto;
 import kr.co.xai.portal.backend.ai.openai.OpenAiClient;
 import kr.co.xai.portal.backend.ai.openai.OpenAiRequest;
 import kr.co.xai.portal.backend.integration.a360.A360ActivityClient;
+import kr.co.xai.portal.backend.integration.a360.dto.A360ScheduleResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException; // Import 추가
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -26,32 +27,50 @@ public class AiPredictiveMaintenanceService {
     public List<BotRiskDto> analyzeBotRisks() {
         List<BotRiskDto> results = new ArrayList<>();
 
-        log.info(">> Starting Dynamic Bot Analysis...");
+        log.info(">> Starting AI Predictive Maintenance (Ongoing + History)...");
 
-        // 1. 최근 7일간 로그 가져오기
-        List<Map<String, Object>> allLogs = activityClient.fetchRecentLogs("", 7);
-
-        if (allLogs.isEmpty()) {
-            return results;
+        // 1. [Context] 스케줄 정보 미리 조회
+        Map<String, A360ScheduleResponse.ScheduleItem> scheduleMap = new HashMap<>();
+        try {
+            A360ScheduleResponse scheduleRes = activityClient.fetchSchedules();
+            if (scheduleRes != null && scheduleRes.getList() != null) {
+                for (A360ScheduleResponse.ScheduleItem item : scheduleRes.getList()) {
+                    if (item.getName() != null)
+                        scheduleMap.put(item.getName(), item);
+                }
+            }
+        } catch (Exception e) {
+            log.warn(">> Failed to fetch schedules.", e);
         }
 
-        // 2. 활성 봇 이름 추출 (최대 3개로 제한하여 토큰 절약)
-        Set<String> activeBotNames = allLogs.stream()
-                .map(log -> (String) log.get("activityName"))
-                .filter(name -> name != null && !name.isBlank())
-                .limit(3) // [수정] 과금 방지를 위해 분석 대상을 3개로 제한
+        // 2. [Target 1] 현재 진행 중인 봇 조회 (우선 분석 대상)
+        List<Map<String, Object>> ongoingJobs = activityClient.fetchUnknownJobs();
+        Set<String> ongoingBotNames = ongoingJobs.stream()
+                .map(j -> (String) j.get("automationName"))
+                .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
-        for (String botName : activeBotNames) {
+        // 3. [History] 최근 14일간 로그 조회 (통계 데이터용)
+        List<Map<String, Object>> allLogs = activityClient.fetchRecentLogs("", 14);
+        Map<String, List<Map<String, Object>>> historyMap = allLogs.stream()
+                .filter(l -> l.get("activityName") != null)
+                .collect(Collectors.groupingBy(l -> (String) l.get("activityName")));
+
+        // 4. 분석 대상 선정 (진행 중인 봇 + 최근 활동 봇 중 상위 5개)
+        Set<String> targetBots = new HashSet<>(ongoingBotNames);
+        targetBots.addAll(historyMap.keySet().stream().limit(5).collect(Collectors.toList()));
+
+        // 5. 봇별 분석 수행
+        for (String botName : targetBots) {
             try {
-                // [수정] API 속도 제한(Rate Limit) 회피를 위해 1초 대기
-                Thread.sleep(1000);
+                // API Rate Limit 조절
+                Thread.sleep(300);
 
-                List<Map<String, Object>> botLogs = allLogs.stream()
-                        .filter(l -> botName.equals(l.get("activityName")))
-                        .collect(Collectors.toList());
+                List<Map<String, Object>> botHistory = historyMap.getOrDefault(botName, new ArrayList<>());
+                A360ScheduleResponse.ScheduleItem schedule = scheduleMap.get(botName);
+                boolean isRunning = ongoingBotNames.contains(botName);
 
-                BotRiskDto dto = analyzeSingleBot(botName, botLogs);
+                BotRiskDto dto = analyzeSingleBot(botName, botHistory, schedule, isRunning);
                 if (dto != null) {
                     results.add(dto);
                 }
@@ -60,35 +79,53 @@ public class AiPredictiveMaintenanceService {
             }
         }
 
+        // 중요도 순 정렬 (Running > Critical > Warning ...)
+        results.sort((a, b) -> {
+            if (a.getStatus().equals("CRITICAL") && !b.getStatus().equals("CRITICAL"))
+                return -1;
+            if (b.getStatus().equals("CRITICAL") && !a.getStatus().equals("CRITICAL"))
+                return 1;
+            return Double.compare(b.getRiskScore(), a.getRiskScore());
+        });
+
         return results;
     }
 
-    private BotRiskDto analyzeSingleBot(String botName, List<Map<String, Object>> logs) {
-        if (logs.size() < 2)
+    private BotRiskDto analyzeSingleBot(String botName, List<Map<String, Object>> history,
+            A360ScheduleResponse.ScheduleItem schedule, boolean isRunning) {
+
+        // 데이터가 너무 없으면 분석 스킵 (단, 실행 중이면 분석 시도)
+        if (history.size() < 2 && !isRunning)
             return null;
 
-        // 통계 계산
-        List<Double> durationHistory = logs.stream()
-                .map(m -> {
-                    try {
-                        return Double.parseDouble(m.get("duration").toString());
-                    } catch (Exception e) {
-                        return 0.0;
-                    }
-                })
-                .collect(Collectors.toList());
+        // --- 1. 정량적 통계 계산 (Statistics) ---
+        int totalRuns = history.size();
+        int failCount = 0;
+        List<Double> durationHistory = new ArrayList<>();
 
-        Collections.reverse(durationHistory);
+        for (Map<String, Object> log : history) {
+            String status = (String) log.get("status");
+            if (status != null && (status.contains("FAILED") || status.contains("OUT") || status.contains("ABORTED"))) {
+                failCount++;
+            }
+            try {
+                durationHistory.add(Double.parseDouble(log.get("duration").toString()));
+            } catch (Exception e) {
+                durationHistory.add(0.0);
+            }
+        }
+        Collections.reverse(durationHistory); // 그래프용 (과거 -> 현재)
 
+        double failureRate = (totalRuns > 0) ? ((double) failCount / totalRuns) * 100.0 : 0.0;
         double avgDuration = durationHistory.stream().mapToDouble(d -> d).average().orElse(0.0);
         double recentDuration = durationHistory.isEmpty() ? 0.0 : durationHistory.get(durationHistory.size() - 1);
 
-        // [핵심] AI 분석 호출 (오류 처리 포함)
-        BotRiskDto aiResult = callOpenAiForAnalysis(botName, logs);
+        // --- 2. AI 분석 요청 (Prediction) ---
+        BotRiskDto aiResult = callOpenAiForPrediction(botName, history, schedule, isRunning, failureRate, totalRuns);
 
         return BotRiskDto.builder()
                 .botName(botName)
-                .department("운영팀")
+                .department(isRunning ? "🚀 Running Now" : (schedule != null ? "Scheduled" : "Manual"))
                 .avgDuration(Math.round(avgDuration * 10) / 10.0)
                 .recentDuration(Math.round(recentDuration * 10) / 10.0)
                 .durationHistory(durationHistory)
@@ -99,31 +136,50 @@ public class AiPredictiveMaintenanceService {
                 .build();
     }
 
-    private BotRiskDto callOpenAiForAnalysis(String botName, List<Map<String, Object>> logs) {
+    private BotRiskDto callOpenAiForPrediction(String botName, List<Map<String, Object>> history,
+            A360ScheduleResponse.ScheduleItem schedule,
+            boolean isRunning, double failureRate, int totalRuns) {
         try {
-            // [수정] 토큰 절약을 위해 로그 샘플링 개수를 5개로 축소
-            int limit = Math.min(logs.size(), 5);
-            StringBuilder logSummary = new StringBuilder();
-            for (int i = 0; i < limit; i++) {
-                Map<String, Object> log = logs.get(i);
-                logSummary.append(String.format("- D:%s, T:%s m, S:%s\n",
-                        log.get("date"), log.get("duration"), log.get("status")));
-            }
+            // Context Building
+            String runStatus = isRunning ? "Currently RUNNING (Active Job)" : "Idle / Scheduled";
+            String scheduleInfo = (schedule != null)
+                    ? String.format("Type: %s, Next: %s", schedule.getScheduleType(), schedule.getNextExecution())
+                    : "No Schedule";
 
-            String prompt = "Analyze bot '" + botName + "' logs.\n" +
-                    "[Logs]\n" + logSummary + "\n" +
-                    "Return JSON: { \"riskScore\": (0-100), \"status\": \"(CRITICAL|WARNING|NORMAL)\", " +
-                    "\"predictedFailure\": \"(Korean short prediction)\", " +
-                    "\"analysisReport\": \"(Korean summary)\" }";
+            // Recent Logs Summary
+            StringBuilder logSummary = new StringBuilder();
+            history.stream().limit(5).forEach(l -> logSummary.append(
+                    String.format("- [%s] %s (Time: %s m)\n", l.get("date"), l.get("status"), l.get("duration"))));
+
+            // Prompt Engineering
+            String prompt = String.format(
+                    "Analyze the risk for RPA Bot '%s'.\n\n" +
+                            "[Current Status] %s\n" +
+                            "[History Stats] Total: %d, Fail Rate: %.1f%%\n" +
+                            "[Schedule] %s\n" +
+                            "[Recent Logs]\n%s\n\n" +
+                            "Task:\n" +
+                            "1. If 'Currently RUNNING' and History Fail Rate is high (>20%%), predict 'HIGH RISK' for this run.\n"
+                            +
+                            "2. If 'Idle' but failures match schedule pattern, predict future risk.\n" +
+                            "3. Return JSON ONLY.\n\n" +
+                            "JSON Format:\n" +
+                            "{\n" +
+                            "  \"riskScore\": (0-100),\n" +
+                            "  \"status\": \"(CRITICAL|WARNING|NORMAL)\",\n" +
+                            "  \"predictedFailure\": \"(Short prediction in Korean, e.g. '현재 실행 중 - 실패 확률 높음')\",\n" +
+                            "  \"analysisReport\": \"(Insight in Korean)\"\n" +
+                            "}",
+                    botName, runStatus, totalRuns, failureRate, scheduleInfo, logSummary.toString());
 
             OpenAiRequest request = new OpenAiRequest();
-            request.setModel("gpt-4o-mini"); // [수정] gpt-4o -> gpt-4o-mini (비용 절감)
+            request.setModel("gpt-4o-mini");
+            // [수정됨] 토큰 제한 설정 필수 (OpenAI API 요구사항)
+            request.setMaxTokens(2000);
             request.addMessage("user", prompt);
 
             String responseJson = openAiClient.call(request);
-            responseJson = cleanJson(responseJson);
-
-            JsonNode root = objectMapper.readTree(responseJson);
+            JsonNode root = objectMapper.readTree(cleanJson(responseJson));
 
             return BotRiskDto.builder()
                     .riskScore(root.path("riskScore").asDouble(0.0))
@@ -132,23 +188,16 @@ public class AiPredictiveMaintenanceService {
                     .analysisReport(root.path("analysisReport").asText("특이사항 없음"))
                     .build();
 
-        } catch (HttpClientErrorException.TooManyRequests e) {
-            // [추가] 429 오류(사용량 초과) 별도 처리
-            log.warn("OpenAI Rate Limit Exceeded for bot: {}", botName);
-            return BotRiskDto.builder()
-                    .riskScore(0.0)
-                    .status("NORMAL")
-                    .predictedFailure("분석 지연")
-                    .analysisReport("AI 사용량이 많아 분석을 건너뛰었습니다. (잠시 후 다시 시도)")
-                    .build();
-
         } catch (Exception e) {
-            log.error("AI Analysis Failed", e);
+            log.error("AI Prediction Failed", e);
+            // 에러 시 Fallback (기계적 룰 기반)
+            double fallbackScore = isRunning && failureRate > 20 ? 80.0 : failureRate;
+            String fallbackStatus = fallbackScore > 50 ? "WARNING" : "NORMAL";
             return BotRiskDto.builder()
-                    .riskScore(0.0)
-                    .status("NORMAL")
-                    .predictedFailure("분석 실패")
-                    .analysisReport("AI 서버 연결 실패")
+                    .riskScore(fallbackScore)
+                    .status(fallbackStatus)
+                    .predictedFailure(isRunning ? "AI 분석 불가 (실행 중)" : "-")
+                    .analysisReport("AI 연결 지연. 히스토리 통계를 참고하세요.")
                     .build();
         }
     }
@@ -156,13 +205,6 @@ public class AiPredictiveMaintenanceService {
     private String cleanJson(String text) {
         if (text == null)
             return "{}";
-        text = text.trim();
-        if (text.startsWith("```json"))
-            text = text.substring(7);
-        if (text.startsWith("```"))
-            text = text.substring(3);
-        if (text.endsWith("```"))
-            text = text.substring(0, text.length() - 3);
-        return text.trim();
+        return text.replaceAll("```json", "").replaceAll("```", "").trim();
     }
 }

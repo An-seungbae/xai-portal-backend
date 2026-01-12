@@ -5,18 +5,19 @@ import kr.co.xai.portal.backend.integration.a360.service.A360TokenService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import java.time.ZonedDateTime;
-import java.util.Collections;
 
 @Slf4j
 @Component
@@ -37,16 +38,24 @@ public class A360ActivityClient {
     }
 
     /**
-     * [추가됨] AI 분석용: 특정 봇의 최근 로그 조회
-     * - fetchActivities를 호출하여 데이터를 가져온 후, 간소화된 Map 리스트로 변환
+     * 2. [신규] 진행중인 활동 (Unknown/Active Jobs) 조회
+     * GET /v1/activity/unknownjobs
+     */
+    public List<Map<String, Object>> fetchUnknownJobs() {
+        // 이 API는 보통 List 형태로 반환됨
+        return callApiList("/v1/activity/unknownjobs", HttpMethod.GET, null);
+    }
+
+    /**
+     * [AI 분석용] 특정 봇의 최근 로그 조회 (데이터 누락 방지 로직 적용)
      */
     public List<Map<String, Object>> fetchRecentLogs(String botName, int days) {
-        log.info(">> [A360 Log Fetch Start] Target: {}, Days: {}", (botName == null ? "ALL" : botName), days);
+        log.info(">> [A360 Log Fetch] Target: {}, Days: {}", (botName == null || botName.isBlank() ? "ALL" : botName),
+                days);
 
-        // 1. 요청 객체 생성
         A360ActivityRequest request = new A360ActivityRequest();
 
-        // 필터 설정 (최근 N일)
+        // 1. 날짜 필터 (최근 N일)
         String dateFilterValue = ZonedDateTime.now().minusDays(days)
                 .format(DateTimeFormatter.ISO_INSTANT);
 
@@ -56,39 +65,43 @@ public class A360ActivityClient {
         filter.put("value", dateFilterValue);
         request.setFilter(filter);
 
-        // 정렬 설정
+        // 2. 정렬 (최신순)
         Map<String, Object> sort = new HashMap<>();
         sort.put("field", "startDateTime");
         sort.put("direction", "desc");
         request.setSort(Collections.singletonList(sort));
 
-        // 2. API 호출
+        // 3. 페이징 (충분한 크기 확보)
+        A360ActivityRequest.Page page = new A360ActivityRequest.Page();
+        page.setOffset(0);
+        page.setLength(1000);
+        request.setPage(page);
+
+        // API 호출
         A360ActivityResponse response = fetchActivities(request);
 
         if (response == null || response.getList() == null) {
-            log.warn("<< [A360 Log Fetch] Result is Empty or Null");
+            log.warn("<< [A360 Log Fetch] Result is Empty");
             return new ArrayList<>();
         }
 
-        // 3. 데이터 가공 (botName이 있으면 필터링, 없으면 통과)
+        // 데이터 필터링 및 가공
         List<Map<String, Object>> result = response.getList().stream()
                 .filter(item -> {
-                    // 봇 이름 필터링 (파라미터가 있을 때만 체크)
                     if (botName == null || botName.isBlank())
                         return true;
-
                     String name = (String) item.get("activityName");
                     return name != null && name.contains(botName);
                 })
-                .limit(50) // 전체 조회일 수 있으므로 제한을 좀 늘림
                 .map(item -> {
                     Map<String, Object> simpleLog = new HashMap<>();
-                    simpleLog.put("activityName", item.get("activityName")); // 봇 이름 식별을 위해 추가
+                    simpleLog.put("activityName", item.get("activityName"));
                     simpleLog.put("date", item.get("startDateTime"));
 
                     Object durationObj = item.get("duration");
                     double durationMin = 0.0;
                     if (durationObj instanceof Number) {
+                        // 초 단위 가정 -> 분 단위 변환
                         durationMin = ((Number) durationObj).doubleValue() / 60.0;
                     }
                     simpleLog.put("duration", String.format("%.1f", durationMin));
@@ -97,28 +110,45 @@ public class A360ActivityClient {
                 })
                 .collect(Collectors.toList());
 
-        log.info("<< [A360 Log Fetch] Retrieved Count: {}", result.size());
+        log.info("<< [A360 Log Fetch] Count: {}", result.size());
         return result;
     }
 
     /**
-     * 2. 스케줄 목록 조회 (Schedules)
+     * 3. 스케줄 목록 조회 (데이터 누락 방지 로직 적용)
      */
     public A360ScheduleResponse fetchSchedules() {
         Map<String, Object> body = new HashMap<>();
+
+        // [필수] 필터 및 페이징 정보가 있어야 전체 목록이 나옴
+        body.put("filter", new HashMap<>());
+        body.put("sort", new ArrayList<>());
+
+        Map<String, Integer> page = new HashMap<>();
+        page.put("offset", 0);
+        page.put("length", 1000); // 넉넉하게
+        body.put("page", page);
+
         return callApi("/v2/schedule/automations/list", HttpMethod.POST, body, A360ScheduleResponse.class);
     }
 
     /**
-     * 3. 디바이스 목록 조회 (Devices)
+     * 4. 디바이스 목록 조회
      */
     public A360DeviceResponse fetchDevices() {
         Map<String, Object> body = new HashMap<>();
+        body.put("filter", new HashMap<>());
+
+        Map<String, Integer> page = new HashMap<>();
+        page.put("offset", 0);
+        page.put("length", 1000);
+        body.put("page", page);
+
         return callApi("/v2/devices/list", HttpMethod.POST, body, A360DeviceResponse.class);
     }
 
     /**
-     * 4. Execution 상세 조회 (Detail)
+     * 5. 상세 조회
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> fetchExecutionDetail(String executionId) {
@@ -127,15 +157,11 @@ public class A360ActivityClient {
         return callApi("/v1/activity/execution/" + executionId, HttpMethod.GET, null, Map.class);
     }
 
-    /**
-     * 공통 API 호출 메서드 (로그 강화)
-     */
+    // --- Private Methods ---
+
     private <T> T callApi(String path, HttpMethod method, Object body, Class<T> clazz) {
         String accessToken = a360TokenService.getAccessToken();
         String fullUrl = baseUrl + path;
-
-        // [로그 추가] 실제 호출되는 URL 확인
-        log.info(">> [A360 API Request] Method: {}, URL: {}", method, fullUrl);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -145,12 +171,34 @@ public class A360ActivityClient {
 
         try {
             ResponseEntity<T> response = restTemplate.exchange(fullUrl, method, entity, clazz);
-            log.info("<< [A360 API Response] Code: {}", response.getStatusCode()); // [로그 추가]
             return response.getBody();
         } catch (Exception e) {
             log.error("!! [A360 API Error] path={}, msg={}", path, e.getMessage());
-            e.printStackTrace(); // 상세 에러 스택 트레이스 출력
             return null;
+        }
+    }
+
+    private List<Map<String, Object>> callApiList(String path, HttpMethod method, Object body) {
+        String accessToken = a360TokenService.getAccessToken();
+        String fullUrl = baseUrl + path;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("x-authorization", accessToken);
+
+        HttpEntity<Object> entity = new HttpEntity<>(body, headers);
+
+        try {
+            ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
+                    fullUrl,
+                    method,
+                    entity,
+                    new ParameterizedTypeReference<List<Map<String, Object>>>() {
+                    });
+            return response.getBody();
+        } catch (Exception e) {
+            log.error("!! [A360 API List Error] path={}, msg={}", path, e.getMessage());
+            return new ArrayList<>();
         }
     }
 }

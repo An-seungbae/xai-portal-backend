@@ -102,7 +102,7 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("존재하지 않는 사용자");
         }
 
-        // ✅ Boolean 타입 체크 수정
+        // Boolean 타입 체크 수정
         if (Boolean.FALSE.equals(user.getEnabled()) || Boolean.TRUE.equals(user.getAccountLocked())) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("비활성 또는 잠금 계정");
         }
@@ -127,7 +127,7 @@ public class AuthController {
         user.setLastLoginAt(java.time.LocalDateTime.now());
         userRepository.save(user);
 
-        // ✅ JWT subject = email
+        // JWT subject = email
         String token = jwtTokenProvider.createAccessToken(
                 user.getEmail(),
                 List.of(user.getRoles()));

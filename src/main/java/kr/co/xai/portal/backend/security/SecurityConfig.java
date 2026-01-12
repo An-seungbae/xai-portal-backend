@@ -1,25 +1,21 @@
 package kr.co.xai.portal.backend.security;
 
 import kr.co.xai.portal.backend.service.PortalUserDetailsService;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
 import org.springframework.http.HttpMethod;
-
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 @Configuration
 @EnableWebSecurity
@@ -58,7 +54,7 @@ public class SecurityConfig {
     }
 
     /**
-     * JWT Filter Bean (핵심)
+     * JWT Filter
      */
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter(
@@ -73,39 +69,36 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(
             HttpSecurity http,
-            JwtAuthenticationFilter jwtAuthenticationFilter) throws Exception {
+            JwtAuthenticationFilter jwtAuthenticationFilter,
+            CorsConfigurationSource corsConfigurationSource) throws Exception {
 
         http
-                // CSRF 비활성화 (JWT)
-                .csrf().disable()
+                // ✅ CORS를 Security에 "명시적으로" 바인딩
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
 
-                // CORS 허용
-                .cors().and()
+                // CSRF 비활성화 (JWT)
+                .csrf(csrf -> csrf.disable())
 
                 // 세션 미사용
-                .sessionManagement()
-                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-                .and()
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
                 // 접근 제어
-                .authorizeRequests()
+                .authorizeHttpRequests(auth -> auth
 
-                // Preflight
-                .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        // ✅ Preflight 요청은 무조건 허용
+                        .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // 인증 / 헬스
-                .antMatchers("/api/auth/**").permitAll()
-                .antMatchers("/api/health/**").permitAll()
+                        // 인증 API
+                        .antMatchers("/api/auth/**").permitAll()
+                        .antMatchers("/api/health/**").permitAll()
 
-                // 오류관리 API (로그인 사용자)
-                .antMatchers("/api/errors/**").authenticated()
-                .antMatchers("/api/ai/**").authenticated()
+                        // 보호 API
+                        .antMatchers("/api/errors/**").authenticated()
+                        .antMatchers("/api/ai/**").authenticated()
 
-                // 그 외
-                .anyRequest().authenticated()
-                .and()
+                        .anyRequest().authenticated())
 
-                // Bean으로 등록된 JWT 필터 사용
+                // JWT 필터
                 .addFilterBefore(
                         jwtAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class);

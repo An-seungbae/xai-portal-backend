@@ -2,6 +2,7 @@ package kr.co.xai.portal.backend;
 
 import kr.co.xai.portal.backend.ai.openai.OpenAiProperties;
 import kr.co.xai.portal.backend.config.JwtProperties;
+import kr.co.xai.portal.backend.config.CorsProperties;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -12,7 +13,8 @@ import org.springframework.boot.web.servlet.support.SpringBootServletInitializer
 @SpringBootApplication
 @EnableConfigurationProperties({
         OpenAiProperties.class,
-        JwtProperties.class
+        JwtProperties.class,
+        CorsProperties.class
 })
 public class XaiPortalBackendApplication extends SpringBootServletInitializer {
 

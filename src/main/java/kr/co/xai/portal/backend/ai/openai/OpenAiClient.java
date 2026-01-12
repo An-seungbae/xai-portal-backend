@@ -13,7 +13,7 @@ public class OpenAiClient {
     private final RestTemplate restTemplate;
 
     /**
-     * 🔹 OpenAI API 공통 호출
+     * OpenAI API 공통 호출
      * - 항상 String(JSON 원문)만 반환
      */
     public String call(OpenAiRequest request) {

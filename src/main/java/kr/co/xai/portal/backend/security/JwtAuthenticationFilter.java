@@ -48,7 +48,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (tokenProvider.validate(token)) {
                 Claims claims = tokenProvider.parseClaims(token);
 
-                // ✅ subject = email
+                // subject = email
                 String email = claims.getSubject();
 
                 List<SimpleGrantedAuthority> authorities = new ArrayList<>();

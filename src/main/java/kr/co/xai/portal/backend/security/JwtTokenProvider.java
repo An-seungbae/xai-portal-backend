@@ -33,7 +33,7 @@ public class JwtTokenProvider {
     }
 
     /**
-     * ✅ subject = email 로 발급
+     * subject = email 로 발급
      */
     public String createAccessToken(String email, List<String> roles) {
         long validityMs = props.getAccessTokenValiditySeconds() * 1000L;
