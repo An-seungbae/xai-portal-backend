@@ -6,13 +6,13 @@ import kr.co.xai.portal.backend.integration.a360.A360ActivityClient;
 import kr.co.xai.portal.backend.integration.a360.dto.A360DeviceResponse;
 import kr.co.xai.portal.backend.integration.a360.dto.A360ScheduleResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.tika.Tika; //  텍스트 추출 엔진 추가
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.List;
+import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
 @Service
@@ -20,62 +20,47 @@ import java.util.List;
 public class AiLearningService {
 
     private final A360ActivityClient a360Client;
-    // [변경] AiDocumentStorageService 대신 전용 Repository 사용
     private final AiLearningLogRepository learningLogRepository;
-    // 실제 RAG 검색을 위해선 VectorDB나 DocumentService에도 저장은 해야 하지만,
-    // 이력 관리는 Log 테이블에서 담당합니다. 여기선 로그 저장 위주로 작성합니다.
+    private final Tika tika = new Tika(); // Tika 인스턴스 초기화
 
+    /**
+     * 1. A360 자산 데이터 자동 학습
+     */
     @Transactional
     public String learnA360Data() {
         int learnedCount = 0;
         log.info(">> Start Learning A360 Data...");
 
-        // 1. 봇 스케줄 학습
         try {
             A360ScheduleResponse schedules = a360Client.fetchSchedules();
             if (schedules != null && schedules.getList() != null) {
                 for (var item : schedules.getList()) {
-                    String summary = String.format("Bot: %s, Next: %s", item.getName(), item.getNextExecution());
-
-                    // 전용 로그 테이블에 저장
                     learningLogRepository.save(AiLearningLog.builder()
-                            .category("BOT_SCHEDULE")
+                            .category("A360_SCHEDULE")
                             .targetName(item.getName())
-                            .contentSummary(summary)
+                            .contentSummary(
+                                    String.format("봇 스케줄: %s, 차기 실행: %s", item.getName(), item.getNextExecution()))
                             .status("SUCCESS")
                             .performedBy("SYSTEM")
                             .build());
-
                     learnedCount++;
                 }
             }
         } catch (Exception e) {
             log.error("Failed to learn Schedules", e);
-            learningLogRepository.save(AiLearningLog.builder()
-                    .category("BOT_SCHEDULE")
-                    .targetName("BATCH_JOB")
-                    .contentSummary("Error: " + e.getMessage())
-                    .status("FAIL")
-                    .performedBy("SYSTEM")
-                    .build());
         }
 
-        // 2. 디바이스 정보 학습
         try {
             A360DeviceResponse devices = a360Client.fetchDevices();
             if (devices != null && devices.getList() != null) {
                 for (var item : devices.getList()) {
-                    String summary = String.format("Host: %s, User: %s, Status: %s",
-                            item.getHostName(), item.getUserName(), item.getStatus());
-
                     learningLogRepository.save(AiLearningLog.builder()
-                            .category("DEVICE_INFO")
+                            .category("A360_DEVICE")
                             .targetName(item.getHostName())
-                            .contentSummary(summary)
+                            .contentSummary(String.format("디바이스: %s, 상태: %s", item.getHostName(), item.getStatus()))
                             .status("SUCCESS")
                             .performedBy("SYSTEM")
                             .build());
-
                     learnedCount++;
                 }
             }
@@ -86,7 +71,44 @@ public class AiLearningService {
         return String.format("총 %d건의 자산 정보를 학습 이력에 기록했습니다.", learnedCount);
     }
 
-    // [추가] 이력 조회 메서드
+    /**
+     * 2. 매뉴얼 문서 지식 습득 (실제 텍스트 추출 기능)
+     * 문서 파일을 분석하여 본문 텍스트를 추출하고 DB에 저장합니다.
+     */
+    @Transactional
+    public String learnManualDocument(MultipartFile file, String tag, String username) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("학습할 파일이 존재하지 않습니다.");
+        }
+
+        try {
+            // 1️ [핵심] Apache Tika를 이용한 본문 텍스트 추출
+            log.info(">> Extracting text from file: {}", file.getOriginalFilename());
+            String extractedText = tika.parseToString(file.getInputStream());
+
+            // 2️ 태그와 함께 추출된 텍스트를 구성
+            String finalContent = String.format("[태그: %s]\n\n%s",
+                    (tag == null || tag.isEmpty() ? "미분류" : tag),
+                    extractedText);
+
+            // 3️ DB에 추출된 전체 본문 저장 (AiLearningLog의 contentSummary는 TEXT 타입이므로 대용량 저장 가능)
+            learningLogRepository.save(AiLearningLog.builder()
+                    .category("MANUAL_DOC")
+                    .targetName(file.getOriginalFilename())
+                    .contentSummary(finalContent)
+                    .status("SUCCESS")
+                    .performedBy(username != null ? username : "admin")
+                    .build());
+
+            log.info(">> Manual Learning Success: {}", file.getOriginalFilename());
+            return "문서 본문 추출 및 지식 등록이 완료되었습니다.";
+
+        } catch (Exception e) {
+            log.error("Manual Learning Failed", e);
+            throw new RuntimeException("문서 분석 중 오류가 발생했습니다: " + e.getMessage());
+        }
+    }
+
     public Page<AiLearningLog> getLearningHistory(Pageable pageable) {
         return learningLogRepository.findAll(pageable);
     }

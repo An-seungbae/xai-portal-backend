@@ -26,7 +26,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     /**
-     * ✅ PasswordEncoder
+     * PasswordEncoder
      */
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -34,7 +34,7 @@ public class SecurityConfig {
     }
 
     /**
-     * ✅ DaoAuthenticationProvider
+     * DaoAuthenticationProvider
      */
     @Bean
     public DaoAuthenticationProvider daoAuthenticationProvider(
@@ -48,7 +48,7 @@ public class SecurityConfig {
     }
 
     /**
-     * ✅ AuthenticationManager
+     * AuthenticationManager
      */
     @Bean
     public AuthenticationManager authenticationManager(
@@ -58,7 +58,7 @@ public class SecurityConfig {
     }
 
     /**
-     * ✅ JWT Filter Bean (🔥 핵심)
+     * JWT Filter Bean (핵심)
      */
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter(
@@ -68,7 +68,7 @@ public class SecurityConfig {
     }
 
     /**
-     * ✅ Security Filter Chain
+     * Security Filter Chain
      */
     @Bean
     public SecurityFilterChain filterChain(
@@ -105,7 +105,7 @@ public class SecurityConfig {
                 .anyRequest().authenticated()
                 .and()
 
-                // ✅ Bean으로 등록된 JWT 필터 사용
+                // Bean으로 등록된 JWT 필터 사용
                 .addFilterBefore(
                         jwtAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class);

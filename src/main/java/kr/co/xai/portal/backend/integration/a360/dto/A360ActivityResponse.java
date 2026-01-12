@@ -10,8 +10,8 @@ import java.util.Map;
 
 @Getter
 @Setter
-@NoArgsConstructor // 👈 추가!
-@AllArgsConstructor // 👈 추가 (선택사항)
+@NoArgsConstructor // 추가!
+@AllArgsConstructor // 추가 (선택사항)
 public class A360ActivityResponse {
 
     private int total;

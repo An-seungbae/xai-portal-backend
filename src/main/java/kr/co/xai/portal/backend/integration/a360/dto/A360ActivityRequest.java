@@ -10,8 +10,8 @@ import java.util.Map;
 
 @Getter
 @Setter
-@NoArgsConstructor // 👈 추가!
-@AllArgsConstructor // 👈 추가 (선택사항)
+@NoArgsConstructor // 추가!
+@AllArgsConstructor // 추가 (선택사항)
 public class A360ActivityRequest {
 
     private List<String> fields;
@@ -21,8 +21,8 @@ public class A360ActivityRequest {
 
     @Getter
     @Setter
-    @NoArgsConstructor // 👈 내부 클래스에도 추가!
-    @AllArgsConstructor // 👈 추가 (선택사항)
+    @NoArgsConstructor // 내부 클래스에도 추가!
+    @AllArgsConstructor // 추가 (선택사항)
     public static class Page {
         private int offset;
         private int length;

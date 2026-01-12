@@ -69,6 +69,10 @@ public class AiCodeReviewService {
             // 4. AI 호출
             OpenAiRequest request = new OpenAiRequest();
             request.setModel("gpt-4o"); // 코드 분석은 성능 좋은 모델 권장
+
+            // [수정] maxTokens 설정 추가 (설정하지 않으면 0으로 전송되어 API 오류 발생)
+            request.setMaxTokens(4000);
+
             request.addMessage("system", "You are a strict and helpful Code Reviewer.");
             request.addMessage("user", prompt);
 

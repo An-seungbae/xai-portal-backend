@@ -22,7 +22,7 @@ public class AiImageStructuredService {
     public Map<String, Object> extractStructuredData(String cleanOcrText) {
 
         try {
-            // 1️⃣ 프롬프트 (스키마 강제)
+            // 1️ 프롬프트 (스키마 강제)
             String prompt = """
                     너는 OCR 텍스트를 분석하여 문서 유형을 분류하고 JSON을 생성한다.
                     [출력 형식]
@@ -30,7 +30,7 @@ public class AiImageStructuredService {
                     OCR 텍스트:
                     """ + cleanOcrText;
 
-            // 2️⃣ [수정] messages 구성 (String, String 타입으로 변경)
+            // 2️ [수정] messages 구성 (String, String 타입으로 변경)
             List<Map<String, String>> messages = new ArrayList<>();
 
             Map<String, String> systemMessage = new HashMap<>();
@@ -44,7 +44,7 @@ public class AiImageStructuredService {
             messages.add(systemMessage);
             messages.add(userMessage);
 
-            // 3️⃣ OpenAI 요청 생성
+            // 3️ OpenAI 요청 생성
             OpenAiRequest request = new OpenAiRequest();
             request.setModel("gpt-4o-mini");
             request.setMessages(messages);
@@ -52,10 +52,10 @@ public class AiImageStructuredService {
             // [수정] max_tokens -> setMaxTokens
             request.setMaxTokens(900);
 
-            // 4️⃣ OpenAI 호출
+            // 4️ OpenAI 호출
             String rawJson = openAiClient.call(request);
 
-            // 5️⃣ [수정] 응답 파싱 (DTO 대신 JsonNode 사용으로 통일)
+            // 5️ [수정] 응답 파싱 (DTO 대신 JsonNode 사용으로 통일)
             JsonNode root = objectMapper.readTree(rawJson);
 
             // 안전한 경로 탐색
@@ -71,7 +71,7 @@ public class AiImageStructuredService {
                 contentJson = contentJson.replace("```json", "").replace("```", "").trim();
             }
 
-            // 6️⃣ JSON → Map 변환
+            // 6️ JSON → Map 변환
             return objectMapper.readValue(
                     contentJson,
                     new TypeReference<Map<String, Object>>() {

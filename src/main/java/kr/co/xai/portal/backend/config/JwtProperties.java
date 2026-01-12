@@ -4,7 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * JWT 설정 바인딩 전용 클래스
- * ❗ @Configuration 절대 사용 금지
+ * 
+ * @Configuration 절대 사용 금지
  */
 @ConfigurationProperties(prefix = "jwt")
 public class JwtProperties {

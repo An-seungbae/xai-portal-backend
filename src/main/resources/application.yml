@@ -8,17 +8,19 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/xai_portal?stringtype=unspecified
     username: postgres
-    password: ${DB_PASSWORD:1234}
+    password: ${SPRING_DATASOURCE_PASSWORD:1234}
     driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
+      # [핵심] Entity 변경 시 테이블 자동 생성/업데이트 (오류 해결)
       ddl-auto: update
     properties:
       hibernate:
-        format_sql: true
-    show-sql: true
+        format_sql: true # SQL 로그 예쁘게 출력
+    show-sql: true # 실행되는 SQL 콘솔에 출력
 
+  # [추가] 파일 업로드 용량 제한 (기본값보다 크게 설정)
   servlet:
     multipart:
       max-file-size: 50MB
@@ -26,15 +28,17 @@ spring:
 
   sql:
     init:
+      # schema.sql 자동 실행 (이미 테이블이 있으면 충돌날 수 있으니 주의, update 모드에선 usually 'never' 권장)
       mode: never
 
 jwt:
-  secret: ${JWT_SECRET:CHANGE_ME_TO_A_LONG_RANDOM_SECRET_VALUE_AT_LEAST_32_CHARS}
+  # 운영에서는 환경변수로 관리 권장
+  secret: ${JWT_KEY:CHANGE_ME_TO_A_LONG_RANDOM_SECRET_VALUE_AT_LEAST_32_CHARS}
   access-token-validity-seconds: 3600
 
 cors:
   allowed-origins:
-    - http://localhost:5173
+    - http://localhost:5173 # Vue Vite
     - http://localhost:3000
     - http://localhost:8080
     - http://192.168.3.54:3000
@@ -43,10 +47,13 @@ a360:
   base-url: http://a360.bitekic.co.kr
   authentication-path: /v2/authentication
   username: admin
-  password: ${A360_PASSWORD:P@ssw0rd}
+  password: P@ssw0rd
   refresh-skew-seconds: 60
   default-expires-in-seconds: 3600
 
+# ===============================
+# OpenAI 설정 (AI 오류 분석용)
+# ===============================
 openai:
   api:
     key: ${OPENAI_API_KEY}

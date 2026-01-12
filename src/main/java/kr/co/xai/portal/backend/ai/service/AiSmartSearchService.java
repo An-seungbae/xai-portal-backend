@@ -29,7 +29,7 @@ public class AiSmartSearchService {
      */
     public AiSmartSearchResponse search(String userQuery, MultipartFile file) {
 
-        // 📸 1. 이미지가 첨부된 경우 -> Vision 분석 모드로 직행
+        // 1. 이미지가 첨부된 경우 -> Vision 분석 모드로 직행
         if (file != null && !file.isEmpty()) {
             log.info("📸 Vision Analysis Request: query=[{}]", userQuery);
             String analysisResult = analyzeImageWithGpt(userQuery, file);
@@ -41,7 +41,7 @@ public class AiSmartSearchService {
                     .build();
         }
 
-        // 📝 2. 텍스트만 있는 경우 -> 의도 파악 후 분기 처리
+        // 2. 텍스트만 있는 경우 -> 의도 파악 후 분기 처리
 
         //
 
@@ -72,7 +72,7 @@ public class AiSmartSearchService {
             resultSummary = "현재 AI 사용량이 폭주하여 일시적으로 답변을 드릴 수 없습니다. 잠시 후 다시 시도해 주세요.";
 
         } else {
-            // ⭐️ [GENERAL] RPA 외의 모든 질문
+            // [GENERAL] RPA 외의 모든 질문
             intent = "GENERAL";
             resultSummary = generateGeneralAnswer(userQuery);
         }
@@ -85,11 +85,11 @@ public class AiSmartSearchService {
     }
 
     // ========================================================================
-    // 🔥 Private Helper Methods
+    // Private Helper Methods
     // ========================================================================
 
     /**
-     * 📸 GPT-4o Vision API 호출 (이미지 분석)
+     * GPT-4o Vision API 호출 (이미지 분석)
      * [수정] DTO가 String 전용으로 변경됨에 따라, 복잡한 이미지 구조 전송이 불가능하여
      * 컴파일 오류 방지를 위해 임시 Mock 응답으로 대체합니다.
      */
@@ -104,7 +104,7 @@ public class AiSmartSearchService {
     }
 
     /**
-     * 🧠 의도 분류 (RPA 3가지 + GENERAL)
+     * 의도 분류 (RPA 3가지 + GENERAL)
      */
     private String identifyIntent(String query) {
         String prompt = "Classify user's intent.\n" +
@@ -151,7 +151,7 @@ public class AiSmartSearchService {
     }
 
     /**
-     * 💬 일반 질문 답변 생성
+     * 일반 질문 답변 생성
      */
     private String generateGeneralAnswer(String query) {
         String today = java.time.LocalDate.now().toString();

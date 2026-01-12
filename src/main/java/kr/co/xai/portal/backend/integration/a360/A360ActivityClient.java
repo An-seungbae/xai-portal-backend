@@ -9,7 +9,6 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -18,7 +17,6 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.time.ZonedDateTime;
 import java.util.Collections;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
