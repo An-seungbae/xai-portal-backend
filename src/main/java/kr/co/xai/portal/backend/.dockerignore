@@ -1,0 +1,22 @@
+# 빌드 결과물 제외 (Docker 내부에서 새로 빌드하므로)
+target/
+*.class
+
+# IDE 설정 제외
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+*.iml
+
+# Git 데이터 제외
+.git/
+.gitignore
+
+# 로그 및 시스템 파일 제외
+logs/
+*.log
+.DS_Store
+Thumbs.db
+# application-secret.yml

@@ -1,18 +1,39 @@
-# 빌드 결과물 및 임시 파일 (차단의 주원인)
+# 1. 빌드 결과물 및 컴파일된 파일 (필수)
 target/
 bin/
 *.class
 
-# IDE 설정
+# 2. IDE 및 에디터 설정 파일 (협업 시 충돌 방지)
+### Eclipse ###
 .settings/
 .project
 .classpath
 .factorypath
+.apt_generated
+.sts4-cache
+
+### IntelliJ IDEA ###
 .idea/
+*.iml
+*.iws
+*.ipr
+out/
 
-# 로그 및 업로드 파일
-uploads/
+### VS Code ###
+.vscode/
+
+# 3. 로그 및 시스템 임시 파일
 *.log
+logs/
+hs_err_pid*
 
-# OS 관련
+# 4. 운영체제 자동 생성 파일
 .DS_Store
+Thumbs.db
+
+# 5. 애플리케이션 업로드 폴더 (로컬 테스트 파일 제외)
+uploads/
+
+# 6. [중요] 보안 민감 정보 및 로컬 설정 (Git 추적 절대 금지)
+# 시크릿 설정 파일 (DB 비밀번호 등)
+# src/main/resources/application-secret.yml
