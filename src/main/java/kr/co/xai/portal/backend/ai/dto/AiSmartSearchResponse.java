@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import java.util.Map;
 
 @Data
 @Builder
@@ -14,7 +15,8 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 public class AiSmartSearchResponse {
-    private String intent; // SCHEDULE, DEVICE, HISTORY
+    // private String intent; // SCHEDULE, DEVICE, HISTORY
+    private String query; // [수정] 사용자가 입력한 검색어 (intent 대신 사용)
     private String summary; // AI 요약 멘트
-    private Object data; // 실제 리스트 데이터 (Generic)
+    private Map<String, Object> data; // 각 툴별 원본 데이터 (key: BOT_STATUS 등)
 }

@@ -23,7 +23,8 @@ public class OpenAiRequest {
     // [스타일 적용] Java 표준 CamelCase 사용 + JSON 매핑
     @JsonProperty("max_tokens")
     private int maxTokens;
-
+    // [수정] 온도(창의성) 설정 필드 추가
+    private Double temperature;
     // [Agent 기능] AI가 사용할 도구 목록
     private List<Map<String, Object>> tools;
 

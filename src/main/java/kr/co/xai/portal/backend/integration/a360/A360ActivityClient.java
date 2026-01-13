@@ -69,6 +69,8 @@ public class A360ActivityClient {
         Map<String, Object> sort = new HashMap<>();
         sort.put("field", "startDateTime");
         sort.put("direction", "desc");
+
+        // [수정] Map을 List에 담아서 설정 (Map에는 add 메소드가 없음)
         request.setSort(Collections.singletonList(sort));
 
         // 3. 페이징 (충분한 크기 확보)
@@ -155,6 +157,14 @@ public class A360ActivityClient {
         if (executionId == null || executionId.isBlank())
             return null;
         return callApi("/v1/activity/execution/" + executionId, HttpMethod.GET, null, Map.class);
+    }
+
+    /**
+     * 6. 라이선스 정보 조회 (Licenses) - [신규 추가]
+     * GET /v2/license
+     */
+    public A360LicenseResponse fetchLicenses() {
+        return callApi("/v2/license", HttpMethod.GET, null, A360LicenseResponse.class);
     }
 
     // --- Private Methods ---
