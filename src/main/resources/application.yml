@@ -14,7 +14,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: update # 운영 배포 시에는 'validate' 또는 'none'으로 변경 권장
     properties:
       hibernate:
         format_sql: true
@@ -30,6 +30,7 @@ spring:
       mode: never
 
 jwt:
+  # 배포 시에는 반드시 복잡한 비밀키로 변경하십시오.
   secret: ${JWT_SECRET:CHANGE_ME_TO_A_LONG_RANDOM_SECRET_VALUE_AT_LEAST_32_CHARS}
   access-token-validity-seconds: 3600
 
@@ -53,6 +54,11 @@ openai:
   api:
     key: ${OPENAI_API_KEY}
     url: https://api.openai.com/v1/chat/completions
-    model: gpt-4o-mini
+    model: gpt-4o-mini # 필요에 따라 gpt-4o 로 변경 가능
     max-tokens: 1000
     timeout-seconds: 120
+
+pinecone:
+  api-key: ${PINECONE_API_KEY:pcsk_3yUqwN_BL2zb8KZzuLQvBWafxq8j7hwqtB27goF6VC1tJnRQA7Wf2vqmwEVdcRuCVroAHj} # 복사한 키를 여기에 직접 붙여넣기 (따옴표 권장)
+  environment: "gcp-starter" # Pinecone 콘솔에 표시된 Environment 값 (예: gcp-starter 또는 us-east-1-aws 등)
+  index-name: "xai-portal-index"

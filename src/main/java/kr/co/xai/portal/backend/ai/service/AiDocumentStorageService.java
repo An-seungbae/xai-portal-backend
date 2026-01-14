@@ -1,5 +1,6 @@
 package kr.co.xai.portal.backend.ai.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import kr.co.xai.portal.backend.ai.dto.AiHistoryListDto;
 import kr.co.xai.portal.backend.ai.dto.AiImageSaveRequest;
 import kr.co.xai.portal.backend.ai.dto.AiImageSaveResponse;
@@ -9,15 +10,15 @@ import kr.co.xai.portal.backend.ai.entity.AiDocumentHistory;
 import kr.co.xai.portal.backend.ai.repository.AiDocumentFieldRepository;
 import kr.co.xai.portal.backend.ai.repository.AiDocumentHistoryRepository;
 import kr.co.xai.portal.backend.ai.repository.AiDocumentRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,6 +30,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AiDocumentStorageService {
@@ -37,6 +39,7 @@ public class AiDocumentStorageService {
     private final AiDocumentFieldRepository fieldRepository;
     private final AiDocumentHistoryRepository historyRepository;
     private final ObjectMapper objectMapper;
+    private final AiVectorService vectorService; // [추가] Vector DB 서비스 주입
 
     // 파일 저장 경로 (프로젝트 루트/uploads)
     private final Path fileStorageLocation = Paths.get("uploads").toAbsolutePath().normalize();
@@ -101,36 +104,51 @@ public class AiDocumentStorageService {
     }
 
     /**
-     * [추가됨] AI 지식 학습 데이터 저장 (물리 파일 X, 텍스트 데이터)
-     * - AiLearningService에서 호출합니다.
+     * [RAG 연동] AI 지식 학습 데이터 저장 (물리 파일 X, 텍스트 데이터)
+     * - DB 저장 후 Vector DB에도 Upsert 합니다.
      */
     @Transactional
     public void saveDocument(String externalId, String title, String author, String content, String tags) {
         // 1. 엔티티 생성
         AiDocument doc = new AiDocument();
-        doc.setSourceFileName(title); // 목록에서 식별하기 쉽도록 제목을 파일명 대신 사용
-        doc.setDocumentType(tags); // 태그 정보를 문서 타입 컬럼에 저장 (필요 시 별도 컬럼 권장)
-        doc.setFilePath(null); // 텍스트 데이터이므로 파일 경로 없음
+        doc.setSourceFileName(title); // 목록에서 식별하기 쉽도록 제목을 사용
+        doc.setDocumentType(tags); // 태그 정보
+        doc.setFilePath(null); // 텍스트 데이터
 
         // 2. 내용(Content)을 JSON 구조로 변환하여 저장
-        // (RAG 검색 시 이 JSON을 파싱하여 내용을 읽음)
         Map<String, String> knowledgeMap = new HashMap<>();
         knowledgeMap.put("externalId", externalId);
         knowledgeMap.put("author", author);
-        knowledgeMap.put("content", content); // 핵심 지식 내용
+        knowledgeMap.put("content", content); // 핵심 지식
 
         String jsonString = "{}";
         try {
             jsonString = objectMapper.writeValueAsString(knowledgeMap);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("JSON 변환 실패", e);
         }
         doc.setAnalysisJson(jsonString);
 
-        // 3. 저장
+        // 3. DB 저장
         AiDocument savedDoc = documentRepository.save(doc);
 
-        // 4. 이력 남기기
+        // 4. [추가] Vector DB에 저장 (RAG 인덱싱)
+        try {
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("title", title);
+            metadata.put("author", author);
+            metadata.put("tags", tags);
+
+            // 문서 ID를 Key로 하여 Pinecone에 벡터 저장
+            vectorService.upsertDocument(savedDoc.getId().toString(), content, metadata);
+            log.info("Vector Indexing Success: docId={}", savedDoc.getId());
+
+        } catch (Exception e) {
+            log.warn("Vector indexing failed for doc: {}", savedDoc.getId(), e);
+            // 벡터 저장이 실패하더라도 DB 저장은 유지 (선택 사항)
+        }
+
+        // 5. 이력 남기기
         saveHistory(savedDoc.getId(), "LEARN", jsonString);
     }
 

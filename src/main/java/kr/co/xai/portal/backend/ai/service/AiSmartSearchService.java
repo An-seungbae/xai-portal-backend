@@ -2,26 +2,21 @@ package kr.co.xai.portal.backend.ai.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import kr.co.xai.portal.backend.ai.annotation.AiTool;
 import kr.co.xai.portal.backend.ai.dto.AiSmartSearchResponse;
-import kr.co.xai.portal.backend.ai.entity.AiLearningLog;
 import kr.co.xai.portal.backend.ai.openai.OpenAiClient;
 import kr.co.xai.portal.backend.ai.openai.OpenAiRequest;
-import kr.co.xai.portal.backend.ai.repository.AiLearningLogRepository;
-import kr.co.xai.portal.backend.integration.a360.A360ActivityClient;
-import kr.co.xai.portal.backend.integration.a360.dto.A360ActivityRequest;
-import kr.co.xai.portal.backend.integration.a360.dto.A360ActivityResponse;
-import kr.co.xai.portal.backend.integration.a360.dto.A360DeviceResponse;
-import kr.co.xai.portal.backend.integration.a360.dto.A360LicenseResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.time.LocalDate;
 import java.util.*;
-import java.util.concurrent.Callable;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -29,207 +24,188 @@ import java.util.stream.Collectors;
 public class AiSmartSearchService {
 
     private final OpenAiClient openAiClient;
-    private final A360ActivityClient a360ActivityClient;
-    private final AiLearningLogRepository learningLogRepository;
+    private final ApplicationContext applicationContext; // [핵심] 모든 Bean을 검색하기 위해 필요
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${openai.api.max-tokens:2000}")
-    private int defaultMaxTokens;
+    // AI에게 보낼 도구 명세서 리스트
+    private final List<Map<String, Object>> toolsSpec = new ArrayList<>();
 
-    // [핵심] 도구(API) 레지스트리: AI가 사용할 수 있는 능력들의 목록
-    private final Map<String, ToolDefinition> toolRegistry = new HashMap<>();
-
-    // 도구 정의 클래스
-    private static class ToolDefinition {
-        String name;
-        String description;
-        Function<String, Object> executor; // 실행 로직
-
-        public ToolDefinition(String name, String description, Function<String, Object> executor) {
-            this.name = name;
-            this.description = description;
-            this.executor = executor;
-        }
-    }
+    // AI가 요청하면 실제로 실행할 함수 맵 (함수명 -> 실행로직)
+    private final Map<String, Function<JsonNode, Object>> toolExecutors = new HashMap<>();
 
     /**
-     * 서버 시작 시 AI가 사용할 수 있는 API 도구들을 자동 등록합니다.
-     * 향후 API가 추가되면 여기에 한 줄만 추가하면 AI가 자동으로 인식합니다.
+     * [자동화 엔진]
+     * 서버가 시작될 때 @AiTool 어노테이션이 붙은 모든 메서드를 찾아서 AI에게 가르칩니다.
+     * 이제 수동으로 registerTool을 호출할 필요가 없습니다.
      */
     @PostConstruct
-    public void initializeTools() {
-        // 1. 봇 상태 조회
-        toolRegistry.put("BOT_STATUS", new ToolDefinition(
-                "BOT_STATUS",
-                "Get current status of all bots/devices (Connected, Disconnected, etc). Keywords: bot status, device, connection.",
-                (arg) -> a360ActivityClient.fetchDevices().getList()));
+    public void initAutoDiscovery() {
+        log.info("🔎 Starting AI Tool Auto-Discovery...");
 
-        // 2. 자동화 이력 조회
-        toolRegistry.put("BOT_HISTORY", new ToolDefinition(
-                "BOT_HISTORY",
-                "Get historical execution logs of automations. Keywords: history, logs, execution, fail, success.",
-                (arg) -> {
-                    A360ActivityRequest req = new A360ActivityRequest();
-                    req.setPage(new A360ActivityRequest.Page(0, 20));
-                    return a360ActivityClient.fetchActivities(req).getList();
-                }));
+        // 1. 스프링에 등록된 모든 Bean 이름 가져오기
+        String[] beanNames = applicationContext.getBeanDefinitionNames();
 
-        // 3. 에러 로그 분석
-        toolRegistry.put("ERROR_LOG", new ToolDefinition(
-                "ERROR_LOG",
-                "Get recent failed or unknown job logs for error analysis. Keywords: error, failure, problem, bug.",
-                (arg) -> a360ActivityClient.fetchRecentLogs(null, 3)));
+        for (String beanName : beanNames) {
+            try {
+                Object bean = applicationContext.getBean(beanName);
+                // AOP 프록시 객체일 경우 실제 클래스 확인 (필요시)
+                Class<?> beanClass = bean.getClass();
 
-        // 4. 라이선스 정보
-        toolRegistry.put("LICENSE_INFO", new ToolDefinition(
-                "LICENSE_INFO",
-                "Get A360 license usage and availability. Keywords: license, purchased, used, count.",
-                (arg) -> a360ActivityClient.fetchLicenses()));
-
-        // 5. [벡터 DB] 사내 지식 검색 (기본적으로 항상 수행하지만, 명시적 도구로도 등록)
-        toolRegistry.put("KNOWLEDGE_BASE", new ToolDefinition(
-                "KNOWLEDGE_BASE",
-                "Search internal documents/vectors for manuals, guides, and past issues.",
-                (arg) -> getVectorSearchResults(arg) // 인자로 검색어 전달
-        ));
-    }
-
-    /**
-     * 스마트 검색 메인 메서드
-     */
-    public AiSmartSearchResponse searchGlobal(String query) {
-        log.info(">> Smart Search Query: {}", query);
-
-        try {
-            // 1. AI에게 어떤 도구가 필요한지 물어봅니다. (Planner)
-            List<String> requiredTools = determineRequiredTools(query);
-            log.info(">> AI Decided to use tools: {}", requiredTools);
-
-            Map<String, Object> aggregatedResults = new HashMap<>();
-            StringBuilder contextBuilder = new StringBuilder();
-
-            // 2. 선택된 도구들을 실행하여 데이터 수집 (Execution)
-            // 항상 KNOWLEDGE_BASE는 기본 포함하거나 AI 판단에 따름
-            if (!requiredTools.contains("KNOWLEDGE_BASE")) {
-                requiredTools.add("KNOWLEDGE_BASE");
-            }
-
-            for (String toolName : requiredTools) {
-                ToolDefinition tool = toolRegistry.get(toolName);
-                if (tool != null) {
-                    try {
-                        Object result = tool.executor.apply(query);
-                        if (result != null) {
-                            aggregatedResults.put(toolName, result);
-                            String jsonResult = objectMapper.writeValueAsString(result);
-                            // 프롬프트에 넣을 데이터 요약 (너무 길면 잘라냄)
-                            contextBuilder.append(String.format("\n=== [%s Data] ===\n%s\n", toolName,
-                                    StringUtils.abbreviate(jsonResult, 3000)));
-                        }
-                    } catch (Exception e) {
-                        log.error("Tool execution failed: {}", toolName, e);
+                // 2. 메서드 전수 조사
+                for (Method method : beanClass.getMethods()) {
+                    if (method.isAnnotationPresent(AiTool.class)) {
+                        // @AiTool이 붙은 메서드 발견! 등록 진행
+                        registerMethodAsTool(bean, method);
                     }
                 }
+            } catch (Exception e) {
+                // 특정 빈 로드 실패는 무시하고 계속 진행 (시스템 빈 등)
+                log.trace("Skipping bean {}: {}", beanName, e.getMessage());
             }
-
-            // 3. 수집된 데이터를 바탕으로 최종 답변 생성 (Synthesis)
-            String summary = generateSummary(query, contextBuilder.toString());
-
-            // 4. 결과 반환 (원본 데이터 + 요약)
-            return AiSmartSearchResponse.builder()
-                    .query(query)
-                    .summary(summary)
-                    .data(aggregatedResults) // 프론트엔드에서 차트/표로 그릴 원본 데이터 맵
-                    .build();
-
-        } catch (Exception e) {
-            log.error("Smart Search Failed", e);
-            return AiSmartSearchResponse.builder()
-                    .query(query)
-                    .summary("검색 중 오류가 발생했습니다: " + e.getMessage())
-                    .build();
         }
-    }
-
-    // --- Private Methods ---
-
-    /**
-     * AI에게 쿼리를 분석시켜 필요한 도구 목록을 받아옵니다.
-     */
-    private List<String> determineRequiredTools(String query) {
-        StringBuilder toolDesc = new StringBuilder();
-        toolRegistry.forEach((k, v) -> toolDesc.append(String.format("- %s: %s\n", k, v.description)));
-
-        String prompt = "You are a Smart Search Agent. Analyze the user query and select the relevant API tools to fetch data.\n"
-                +
-                "Available Tools:\n" + toolDesc.toString() +
-                "\nUser Query: \"" + query + "\"\n" +
-                "Response Format: Return ONLY a comma-separated list of Tool Names (e.g., BOT_STATUS, ERROR_LOG). If unsure, include KNOWLEDGE_BASE.";
-
-        try {
-            String response = callGpt(prompt, 0.0); // Temperature 0 for logic
-            return Arrays.stream(response.split(","))
-                    .map(String::trim)
-                    .filter(toolRegistry::containsKey)
-                    .collect(Collectors.toList());
-        } catch (Exception e) {
-            // 실패 시 기본적으로 지식 검색만 수행
-            return new ArrayList<>(List.of("KNOWLEDGE_BASE"));
-        }
+        log.info("✅ AI Agent is ready with {} tools.", toolsSpec.size());
     }
 
     /**
-     * 최종 요약 생성
+     * 발견된 Java 메서드를 OpenAI 도구 형식(JSON Schema)으로 변환하여 등록
      */
-    private String generateSummary(String query, String context) {
-        if (context.trim().isEmpty()) {
-            return "검색 결과가 없습니다.";
-        }
-        String prompt = "User Query: " + query + "\n\n" +
-                "Integrated Data from Systems:\n" + context + "\n\n" +
-                "Instruction: Based on the data above, provide a comprehensive answer in Korean. " +
-                "Cite the source (e.g., [Bot Status], [Knowledge Base]) when mentioning specific facts. " +
-                "Use Markdown formatting.";
+    private void registerMethodAsTool(Object bean, Method method) {
+        AiTool annotation = method.getAnnotation(AiTool.class);
+        String functionName = method.getName(); // 함수 이름 (예: searchRealTimeNews)
+        String description = annotation.description();
 
-        return callGpt(prompt, 0.5);
+        log.info("   + Registering Tool: {}", functionName);
+
+        // 1. 파라미터 분석 -> JSON Schema 자동 생성
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("type", "object");
+        Map<String, Object> props = new HashMap<>();
+
+        // 메서드의 파라미터들을 하나씩 까봅니다.
+        for (Parameter param : method.getParameters()) {
+            String paramName = param.getName(); // 주의: 컴파일 시 -parameters 옵션이 없으면 arg0 등으로 나올 수 있음
+
+            // 파라미터 타입에 따른 스키마 정의 (기본 string, 숫자면 integer)
+            String type = "string";
+            if (param.getType() == int.class || param.getType() == Integer.class)
+                type = "integer";
+            else if (param.getType() == boolean.class || param.getType() == Boolean.class)
+                type = "boolean";
+
+            props.put(paramName, Map.of("type", type, "description", "Parameter " + paramName));
+        }
+        parameters.put("properties", props);
+
+        // 2. OpenAI Tools Spec에 추가
+        Map<String, Object> function = new HashMap<>();
+        function.put("name", functionName);
+        function.put("description", description);
+        function.put("parameters", parameters);
+
+        Map<String, Object> tool = new HashMap<>();
+        tool.put("type", "function");
+        tool.put("function", function);
+        toolsSpec.add(tool);
+
+        // 3. 실행 로직(Executor) 등록 (Reflection 사용)
+        toolExecutors.put(functionName, (jsonArgs) -> {
+            try {
+                // AI가 준 JSON 파라미터를 Java 객체로 변환
+                Object[] args = new Object[method.getParameterCount()];
+                Parameter[] methodParams = method.getParameters();
+
+                for (int i = 0; i < methodParams.length; i++) {
+                    String paramName = methodParams[i].getName();
+                    Class<?> paramType = methodParams[i].getType();
+
+                    // JSON에 해당 파라미터가 있으면 변환해서 넣고, 없으면 null
+                    if (jsonArgs.has(paramName)) {
+                        args[i] = objectMapper.treeToValue(jsonArgs.get(paramName), paramType);
+                    } else {
+                        args[i] = null;
+                    }
+                }
+                // 실제 메서드 실행 (invoke)
+                return method.invoke(bean, args);
+            } catch (Exception e) {
+                log.error("Tool Execution Failed: {}", functionName, e);
+                return "Error: " + e.getMessage();
+            }
+        });
     }
 
-    private String callGpt(String prompt, double temperature) {
-        OpenAiRequest req = new OpenAiRequest();
-        req.setModel("gpt-4o-mini"); // 빠르고 똑똑한 모델
-        req.setTemperature(temperature);
-        req.addMessage("user", prompt);
+    /**
+     * 메인 검색 메서드 (Agent Loop) - 기존 로직 유지
+     */
+    public AiSmartSearchResponse searchGlobal(String userQuery) {
+        log.info(">> Agent Start: {}", userQuery);
+
+        OpenAiRequest request = new OpenAiRequest();
+        request.setModel("gpt-4o-mini");
+        request.setTools(toolsSpec);
+        request.setTool_choice("auto");
+        request.setMaxTokens(2000);
+        request.setTemperature(0.0);
+
+        request.addMessage("system",
+                "You are an AI Assistant for A360 RPA. Today is " + LocalDate.now() + ". Use tools to fetch data.");
+        request.addMessage("user", userQuery);
+
+        Map<String, Object> aggregatedData = new HashMap<>();
+        String finalAnswer = "";
 
         try {
-            String resp = openAiClient.call(req);
-            JsonNode node = objectMapper.readTree(resp);
-            return node.path("choices").get(0).path("message").path("content").asText();
+            // 최대 4번 왕복 (Think -> Act -> Observe -> Think ...)
+            for (int i = 0; i < 4; i++) {
+                String responseBody = openAiClient.call(request);
+                JsonNode rootNode = objectMapper.readTree(responseBody);
+                JsonNode choice = rootNode.path("choices").get(0);
+                JsonNode message = choice.path("message");
+
+                // AI가 도구를 쓰겠다고 함?
+                if (message.has("tool_calls")) {
+                    JsonNode toolCalls = message.get("tool_calls");
+                    request.addAssistantMessageWithToolCalls(toolCalls);
+
+                    for (JsonNode toolCall : toolCalls) {
+                        String functionName = toolCall.path("function").path("name").asText();
+                        String arguments = toolCall.path("function").path("arguments").asText();
+                        String toolCallId = toolCall.path("id").asText();
+
+                        log.info(">> AI executes tool: {} with args: {}", functionName, arguments);
+
+                        // 도구 실행 (여기서 위에서 등록한 Reflection 로직이 돕니다)
+                        Object result = executeTool(functionName, arguments);
+
+                        aggregatedData.put(functionName.toUpperCase(), result);
+                        request.addToolOutputMessage(toolCallId, objectMapper.writeValueAsString(result));
+                    }
+                } else {
+                    // 최종 답변
+                    finalAnswer = message.path("content").asText();
+                    break;
+                }
+            }
         } catch (Exception e) {
-            log.error("GPT Call Failed", e);
-            throw new RuntimeException("AI processing failed");
+            log.error("Agent Loop Error", e);
+            finalAnswer = "Error: " + e.getMessage();
         }
+
+        return AiSmartSearchResponse.builder()
+                .query(userQuery)
+                .summary(finalAnswer)
+                .data(aggregatedData)
+                .build();
     }
 
-    // 벡터 DB 검색 시뮬레이션 (실제로는 Repository 호출)
-    private Object getVectorSearchResults(String query) {
-        List<AiLearningLog> logs = learningLogRepository.findAllByOrderByLearnedAtDesc(); // 실제론 검색 로직 필요
-        // 간단한 키워드 필터링 (임시)
-        return logs.stream()
-                .filter(log -> log.getContentSummary().contains(query) || log.getTargetName().contains(query))
-                .limit(5)
-                .map(l -> Map.of("title", l.getTargetName(), "summary", l.getContentSummary(), "category",
-                        l.getCategory()))
-                .collect(Collectors.toList());
-    }
-
-    // StringUtils.abbreviate helper
-    private static class StringUtils {
-        static String abbreviate(String str, int maxWidth) {
-            if (str == null)
-                return "";
-            if (str.length() <= maxWidth)
-                return str;
-            return str.substring(0, maxWidth) + "...";
+    private Object executeTool(String name, String jsonArgs) {
+        if (!toolExecutors.containsKey(name))
+            return "Error: Unknown tool '" + name + "'";
+        try {
+            JsonNode argsNode = objectMapper.readTree(jsonArgs);
+            return toolExecutors.get(name).apply(argsNode);
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
         }
     }
 }

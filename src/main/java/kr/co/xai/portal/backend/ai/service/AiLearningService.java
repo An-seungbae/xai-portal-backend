@@ -14,6 +14,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream; // [수정] InputStream 임포트 추가
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -81,10 +83,14 @@ public class AiLearningService {
             throw new IllegalArgumentException("학습할 파일이 존재하지 않습니다.");
         }
 
-        try {
+        // [수정] try-with-resources를 사용하여 InputStream 자동 Close 처리
+        try (InputStream inputStream = file.getInputStream()) {
+
             // 1️ [핵심] Apache Tika를 이용한 본문 텍스트 추출
             log.info(">> Extracting text from file: {}", file.getOriginalFilename());
-            String extractedText = tika.parseToString(file.getInputStream());
+            // 기존: String extractedText = tika.parseToString(file.getInputStream());
+            // 변경: 생성한 inputStream 변수 사용
+            String extractedText = tika.parseToString(inputStream);
 
             // 2️ 태그와 함께 추출된 텍스트를 구성
             String finalContent = String.format("[태그: %s]\n\n%s",

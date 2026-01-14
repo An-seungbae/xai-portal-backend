@@ -1,9 +1,7 @@
 package kr.co.xai.portal.backend.ai.service;
 
-import kr.co.xai.portal.backend.ai.entity.AiLearningLog;
 import kr.co.xai.portal.backend.ai.openai.OpenAiClient;
 import kr.co.xai.portal.backend.ai.openai.OpenAiRequest;
-import kr.co.xai.portal.backend.ai.repository.AiLearningLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,10 +19,10 @@ import java.util.stream.Collectors;
 public class AiCodeReviewService {
 
     private final OpenAiClient openAiClient;
-    private final AiLearningLogRepository learningLogRepository;
+    private final AiVectorService vectorService;
 
     /**
-     * 코드 파일(.txt, .json, .bot 등)을 받아 AI 리뷰를 수행합니다.
+     * 코드 파일(.txt, .json, .bot 등)을 받아 RAG 기반 AI 리뷰를 수행합니다.
      */
     public String reviewCodeFile(MultipartFile file) {
         try {
@@ -34,46 +32,48 @@ public class AiCodeReviewService {
                     .lines()
                     .collect(Collectors.joining("\n"));
 
-            // 2. [핵심] 학습된 지식 가져오기 (RAG)
-            // 최근 학습한 A360 자산 정보(봇 스케줄, 디바이스 등)를 조회하여 컨텍스트로 제공
-            List<AiLearningLog> knowledgeBase = learningLogRepository.findAllByOrderByLearnedAtDesc();
+            // 2. [RAG 핵심] 벡터 DB 기반 지식 검색
+            // 코드의 앞부분(요약)이나 전체를 쿼리로 사용하여, 가장 연관성 높은 사내 가이드/규정을 찾습니다.
+            // (코드가 너무 길면 앞부분 300자만 쿼리로 사용하여 검색 속도 및 정확도 최적화)
+            String query = "RPA Code Security & Best Practice Check: " +
+                    (codeContent.length() > 300 ? codeContent.substring(0, 300) : codeContent);
 
-            // 토큰 절약을 위해 최근 20건의 핵심 지식만 요약
-            String knowledgeContext = knowledgeBase.stream()
-                    .limit(20)
-                    .map(log -> String.format("- [%s] %s: %s", log.getCategory(), log.getTargetName(),
-                            log.getContentSummary()))
-                    .collect(Collectors.joining("\n"));
+            // Pinecone에서 유사도가 높은 상위 5개 문서를 가져옵니다.
+            List<String> relevantDocs = vectorService.searchSimilarDocuments(query, 5);
 
-            if (knowledgeContext.isEmpty()) {
-                knowledgeContext = "학습된 내부 자산 정보가 없습니다.";
+            String knowledgeContext;
+            if (relevantDocs == null || relevantDocs.isEmpty()) {
+                knowledgeContext = "연관된 학습 문서(Knowledge Base)가 없습니다. 일반적인 RPA Best Practice 기준으로 리뷰합니다.";
+            } else {
+                // 검색된 문서들을 프롬프트에 넣기 좋게 포맷팅
+                knowledgeContext = String.join("\n\n--- [Internal Reference / Guideline] ---\n", relevantDocs);
             }
 
-            // 3. 프롬프트 구성 (코드 + 지식)
+            // 3. 프롬프트 구성 (코드 + 검색된 사내 지식)
             String prompt = "You are 'The Code Doctor', an expert RPA Code Reviewer.\n\n" +
-                    "I will provide you with **RPA Code** and **Internal Knowledge Base** (Learned Data).\n" +
+                    "I will provide you with **RPA Code** and **Retrieved Internal Knowledge** (RAG).\n" +
                     "Your task is to review the code based on Best Practices AND check for consistency with our Internal Knowledge.\n\n"
                     +
-                    "### [Internal Knowledge Base]\n" +
-                    "(Use this data to validate bot names, schedules, or device references in the code)\n" +
+                    "### [Retrieved Internal Knowledge]\n" +
+                    "(These are the company's specific guidelines or similar past cases found in our Vector DB)\n" +
                     knowledgeContext + "\n\n" +
                     "### [Source Code]\n" +
                     codeContent + "\n\n" +
                     "### Instructions:\n" +
-                    "1. Analyze the code for **Security Risks** (hardcoded passwords, IPs).\n" +
-                    "2. Check for **Inefficiencies** (long delays, redundant loops).\n" +
-                    "3. **Validate against Internal Knowledge**: If the code mentions a Bot Name or Device not found in the Knowledge Base, warn the user.\n"
+                    "1. **Security Check**: Look for hardcoded passwords, sensitive IPs, or non-compliant logic based on the [Retrieved Internal Knowledge].\n"
                     +
-                    "4. Output the result in **Korean** with Markdown format.";
+                    "2. **Optimization**: Check for long delays, redundant loops, or resource leaks.\n" +
+                    "3. **Consistency**: If the code violates any rule found in the Knowledge Base, explicitly cite the rule.\n"
+                    +
+                    "4. Output the result in **Korean** with Markdown format (Use sections like '🚨 보안 경고', '💡 최적화 제안', '✅ 모범 사례').";
 
             // 4. AI 호출
             OpenAiRequest request = new OpenAiRequest();
-            request.setModel("gpt-4o"); // 코드 분석은 성능 좋은 모델 권장
+            request.setModel("gpt-4o");
+            request.setMaxTokens(4000); // 충분한 답변 길이를 위해 설정
 
-            // [수정] maxTokens 설정 추가 (설정하지 않으면 0으로 전송되어 API 오류 발생)
-            request.setMaxTokens(4000);
-
-            request.addMessage("system", "You are a strict and helpful Code Reviewer.");
+            request.addMessage("system",
+                    "You are a strict and helpful Code Reviewer. You always cite internal guidelines if applicable.");
             request.addMessage("user", prompt);
 
             return openAiClient.call(request);
